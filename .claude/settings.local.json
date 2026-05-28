@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(pip install openai python-dotenv --only-binary :all: -q 2>&1)",
+      "PowerShell(python -c \"import dotenv; print\\('python-dotenv: OK'\\)\")",
+      "Bash(touch \"c:/Users/ezra.zhang/Desktop/agent-demo/chat-agent/main.py\" \"c:/Users/ezra.zhang/Desktop/agent-demo/chat-agent/llm.py\" \"c:/Users/ezra.zhang/Desktop/agent-demo/chat-agent/tools.py\" \"c:/Users/ezra.zhang/Desktop/agent-demo/chat-agent/memory.py\" \"c:/Users/ezra.zhang/Desktop/agent-demo/chat-agent/prompts.py\" \"c:/Users/ezra.zhang/Desktop/agent-demo/chat-agent/history.json\")",
+      "WebSearch",
+      "Bash(python main.py)",
+      "Bash(ls \"c:/Users/ezra.zhang/.claude/projects\" 2>/dev/null || echo \"no projects dir\")",
+      "Read(//c/Users/ezra.zhang/.claude/projects/**)",
+      "Bash(mkdir -p \"c:/Users/ezra.zhang/Desktop/agent-demo/sessions\" && cp \"c:/Users/ezra.zhang/.claude/projects/c--Users-ezra-zhang-Desktop-agent-demo/71de0f1a-5e52-4b61-89d6-6d7c97659573.jsonl\" \"c:/Users/ezra.zhang/Desktop/agent-demo/sessions/\")",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\ezra.zhang\\Desktop\\agent-demo\\chat-agent",
+      "c:\\Users\\ezra.zhang\\.claude\\projects\\c--Users-ezra-zhang-Desktop-agent-demo"
+    ]
+  }
+}
