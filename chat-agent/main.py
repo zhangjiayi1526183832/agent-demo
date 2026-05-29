@@ -1,7 +1,10 @@
 """入口 — CLI 聊天循环"""
 
+import json
+
 from llm import chat
 from prompts import get_system_message, list_personas
+from tools import TOOL_DEFINITIONS, execute
 
 
 def main():
@@ -16,7 +19,6 @@ def main():
     except (ValueError, IndexError):
         persona = personas[0]
 
-    # system prompt 始终在 messages[0]
     messages = [get_system_message(persona)]
 
     print(f"\n当前人格: {persona}")
@@ -42,11 +44,48 @@ def main():
                 print("无效选择")
             continue
 
+        # 用户消息放入上下文
         messages.append({"role": "user", "content": user_input})
-        print(f"[DEBUG] 即将发送 {len(messages)} 条消息")
-        reply = chat(messages)
-        messages.append({"role": "assistant", "content": reply})
-        print(f"AI: {reply}")
+
+        # ---- 工具调用内循环 ----
+        while True:
+            print(f"[DEBUG] 即将发送 {len(messages)} 条消息")
+            response = chat(messages, tools=TOOL_DEFINITIONS)
+
+            tool_calls = response.get("tool_calls")
+            if tool_calls:
+                # LLM 想调用工具
+                for tc in tool_calls:
+                    fn = tc["function"]
+                    name = fn["name"]
+                    args = fn.get("arguments", "{}")
+                    # args 可能是 JSON 字符串，需要解析
+                    if isinstance(args, str):
+                        args = json.loads(args)
+
+                    print(f"[TOOL] 调用: {name}({args})")
+                    result = execute(name, args)
+                    print(f"[TOOL] 结果: {result}")
+
+                    # 把工具调用和结果都放入上下文
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [tc],
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result,
+                    })
+                # 继续内循环，让 LLM 看到工具结果后再决定
+                continue
+
+            # LLM 返回的是普通文本回复
+            reply = response.get("content", "")
+            messages.append({"role": "assistant", "content": reply})
+            print(f"AI: {reply}")
+            break  # 退出内循环，等待下一个用户输入
 
 
 if __name__ == "__main__":

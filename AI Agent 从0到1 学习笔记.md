@@ -300,4 +300,202 @@ LLM 收到结果: "现在是 14:30"              ← LLM 把结果转成自然�
 
 ---
 
+## Day 4：Tool Calling（工具调用）（2026-05-29）
+
+### 实现了什么
+
+三个文件全部改动：
+
+**tools.py** — 定义 4 个工具 + 执行函数：
+
+```python
+# 工具定义（JSON Schema，告诉 LLM 工具怎么用）
+TOOL_DEFINITIONS = [
+    {"type": "function", "function": {"name": "get_current_time", ...}},
+    {"type": "function", "function": {"name": "get_weather", ...}},
+    {"type": "function", "function": {"name": "calculate", ...}},
+    {"type": "function", "function": {"name": "run_shell", ...}},
+]
+
+# 执行函数（真正干活的地方）
+def execute(name, arguments):
+    if name == "get_current_time": return datetime.now()
+    if name == "calculate": return eval(expression)
+    ...
+```
+
+**llm.py** — 返回完整消息对象，不再只是文本：
+
+```python
+# Day 3: 只返回 str
+return data["choices"][0]["message"]["content"]
+
+# Day 4: 返回完整 dict（可能包含 tool_calls）
+return {
+    "role": "assistant",
+    "content": msg.get("content"),       # 普通文本回复时为 str
+    "tool_calls": msg.get("tool_calls"), # 想调工具时为 list
+}
+```
+
+**main.py** — 加入工具调用内循环：
+
+```python
+messages.append({"role": "user", "content": user_input})
+
+while True:  # 内循环：工具调用
+    response = chat(messages, tools=TOOL_DEFINITIONS)
+
+    if response["tool_calls"]:
+        for tc in response["tool_calls"]:
+            result = execute(tc["function"]["name"], args)
+            messages.append({"role": "tool", "content": result, ...})
+        continue  # 继续循环，LLM 看到结果后再决定
+
+    # 纯文本回复，退出内循环
+    print(response["content"])
+    break
+```
+
+### 现在能做什么
+
+实测四个工具全部生效：
+
+```
+You: 现在几点？
+[TOOL] 调用: get_current_time({})
+[TOOL] 结果: 2026-05-29 10:43:45
+AI: 现在是 2026年5月29日 10:43:45。
+
+You: 123 * 456 + 789
+[TOOL] 调用: calculate({'expression': '123*456+789'})
+[TOOL] 结果: 56877
+AI: 计算结果是 56,877。
+
+You: 北京天气怎么样？
+[TOOL] 调用: get_weather({'city': '北京'})
+[TOOL] 结果: 晴，25°C，湿度 40%
+AI: ☀️ 天气晴，温度25°C，湿度40%...
+
+You: ls 一下当前目录
+[TOOL] 调用: run_shell({'command': 'ls -la'})
+[TOOL] 结果: (真实文件列表)
+AI: (列出了目录中的所有文件)
+```
+
+甚至能**链式调用**——LLM 调一个工具后不满意，自动调下一个：
+
+```
+You: 北京天气怎么样？
+[TOOL] get_weather('北京') → "暂无数据"  ← 第一次失败
+[TOOL] get_current_time() → "10:44"     ← 自动补调时间
+AI: 虽然没拿到天气，但现在时间是...     ← 给出有用回答
+```
+
+### 不足在哪里（痛点）
+
+**1. LLM 是"被动的"——不会主动行动**
+
+每次都需要用户先输入。LLM 不会主动说"我注意到天气变了，需要提醒你"。它等待用户触发。
+
+**2. 工具调用质量不稳定**
+
+LLM 有时选错工具，有时传错参数。工具定义（description）的质量直接决定 LLM 的调用准确率。
+
+**3. 没有判断标准——调用完就结束了**
+
+LLM 不会验证工具结果是否符合预期。比如计算 1/0 会返回 "计算错误"，但 LLM 不会重试或调整策略。
+
+**4. 最关键的问题：这还不是真正的 Agent**
+
+当前的循环是这样的：
+
+```
+用户输入 → LLM思考 → 调用工具 → LLM总结 → 结束
+```
+
+而真正的 Agent 循环应该是：
+
+```
+用户输入 → LLM思考 → 调用工具 → 观察结果 → 
+LLM再思考 → 再调用工具 → 再观察 → ... → 
+LLM判断"任务完成" → 结束
+```
+
+现在的代码里，内循环 `while True` 已经能支持多次工具调用，但它本质上是**反应式的**——LLM 只会"被要求回答一个问题"。它不会自主决定"我需要完成一个多步任务"。
+
+### 如何触发这个不足
+
+```
+You: 帮我查一下北京和上海的天气，告诉我哪个城市更热
+```
+
+预期行为：LLM 并行/串行查两个城市 → 比较温度 → 回答
+实际可能：LLM 只查一个城市就回答了，或者调用顺序混乱
+
+```
+You: 创建一个 test 目录，在里面新建一个 readme.txt，写入 "hello"
+```
+
+这是一个需要 3 步的任务：mkdir → cd → write file。当前 Agent 很难自主规划并执行这种多步任务。
+
+### 为什么
+
+当前的循环设计是"一问一答"的扩展：
+
+```python
+while True:  # 外层：每轮用户输入
+    user_input = input()
+    messages.append(user_input)
+    
+    while True:  # 内层：处理当前这一个问题
+        response = chat(messages, tools)
+        if tool_calls: ...  # 执行工具
+        else: break         # 回答完毕，等待下一个用户输入
+```
+
+问题在于：**外层循环等待用户输入，内层循环不知道自己"做完了没有"。**
+
+真正的 Agent 不需要等待用户输入就能自主推进任务。它需要自己决定"下一步做什么"。
+
+### 引出什么概念
+
+**Agent Loop**——Day 5 的主题。把上面的逻辑翻转：
+
+```python
+while True:
+    response = chat(messages, tools)
+    
+    if task_complete:
+        break
+    elif tool_calls:
+        execute()
+        observe()
+    else:
+        # LLM 在"思考"，等待它做出决定
+        ...
+```
+
+关键变化：**循环不再由用户输入驱动，而是由 LLM 的"思考-行动-观察"循环驱动。**
+
+这就是 ReAct 模式（Reasoning + Acting）：
+```
+Thought → Action → Observation → Thought → Action → ...
+```
+
+### 核心理解
+
+LLM 的输出不再是单一的文本回复，而是两种类型交替出现：
+
+| 类型 | 含义 | 谁执行 |
+|------|------|--------|
+| `content: "..."` | 对用户说话 | LLM |
+| `tool_calls: [...]` | 要执行的动作 | **你的代码** |
+
+Agent 的本质就是协调这两种输出。
+
+---
+
+
+
 
