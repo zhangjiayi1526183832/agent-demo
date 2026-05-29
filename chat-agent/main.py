@@ -6,8 +6,19 @@ from llm import chat
 from prompts import get_system_message, list_personas
 from tools import TOOL_DEFINITIONS, execute
 
+# ---- 日志开关 ----
+DEBUG = False
+
+
+def log(tag: str, msg: str):
+    """仅当 DEBUG=True 时打印"""
+    if DEBUG:
+        print(f"[{tag}] {msg}")
+
 
 def main():
+    global DEBUG
+
     # 选择人格
     personas = list_personas()
     print("可用人格:")
@@ -22,7 +33,7 @@ def main():
     messages = [get_system_message(persona)]
 
     print(f"\n当前人格: {persona}")
-    print("Chat Agent (输入 /exit 退出, /persona 切换人格)")
+    print("Chat Agent (输入 /exit 退出, /persona 切换人格, /debug 切换日志)")
     print("-" * 40)
 
     while True:
@@ -30,6 +41,11 @@ def main():
         if user_input == "/exit":
             print("再见！")
             break
+
+        if user_input == "/debug":
+            DEBUG = not DEBUG
+            print(f"日志已{'开启' if DEBUG else '关闭'}")
+            continue
 
         if user_input == "/persona":
             print("可用人格:")
@@ -49,7 +65,7 @@ def main():
 
         # ---- 工具调用内循环 ----
         while True:
-            print(f"[DEBUG] 即将发送 {len(messages)} 条消息")
+            log("DEBUG", f"即将发送 {len(messages)} 条消息")
             response = chat(messages, tools=TOOL_DEFINITIONS)
 
             tool_calls = response.get("tool_calls")
@@ -63,9 +79,9 @@ def main():
                     if isinstance(args, str):
                         args = json.loads(args)
 
-                    print(f"[TOOL] 调用: {name}({args})")
+                    log("TOOL", f"调用: {name}({args})")
                     result = execute(name, args)
-                    print(f"[TOOL] 结果: {result}")
+                    log("TOOL", f"结果: {result}")
 
                     # 把工具调用和结果都放入上下文
                     messages.append({
