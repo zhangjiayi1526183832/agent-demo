@@ -105,9 +105,15 @@ def execute(name: str, arguments: dict) -> str:
         command = arguments.get("command", "")
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True, timeout=10
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                encoding="utf-8",
+                errors="replace",  # 遇到无法解码的字节用 � 替代而不是崩溃
             )
-            output = result.stdout or result.stderr
+            output = result.stdout or result.stderr or ""
             return output.strip() or "(无输出，命令执行成功)"
         except subprocess.TimeoutExpired:
             return "命令执行超时"
