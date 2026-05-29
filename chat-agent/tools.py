@@ -70,6 +70,19 @@ TOOL_DEFINITIONS = [
     },
 ]
 
+# ---- 编码处理 ----
+
+def _decode_bytes(raw: bytes) -> str:
+    """尝试多种编码解码 shell 输出，优先 UTF-8，失败则用 GBK"""
+    # Windows 上 shell 输出可能在 UTF-8 和 GBK 之间
+    for encoding in ("utf-8", "gbk", "cp936", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 # ---- 工具执行 ----
 
 _WEATHER_DATA = {
@@ -108,12 +121,11 @@ def execute(name: str, arguments: dict) -> str:
                 command,
                 shell=True,
                 capture_output=True,
-                text=True,
                 timeout=10,
-                encoding="utf-8",
-                errors="replace",  # 遇到无法解码的字节用 � 替代而不是崩溃
             )
-            output = result.stdout or result.stderr or ""
+            # 拿到原始 bytes，尝试多种编码解码
+            raw = result.stdout or result.stderr or b""
+            output = _decode_bytes(raw)
             return output.strip() or "(无输出，命令执行成功)"
         except subprocess.TimeoutExpired:
             return "命令执行超时"
