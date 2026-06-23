@@ -496,6 +496,156 @@ Agent 的本质就是协调这两种输出。
 
 ---
 
+## Day 5：Agent Loop（2026-06-23）
+
+### 实现了什么
+
+**把埋在 main() 里的内循环提取为有名字的函数——`agent_loop()`。**
+
+之前（Day 4）的 main.py：
+
+```python
+while True:  # 外层等用户输入
+    user_input = input()
+    messages.append(...)
+    
+    while True:  # 内层工具调用 — 匿名的，隐藏的
+        response = chat(messages, tools)
+        if tool_calls: ...
+        else: break
+```
+
+现在（Day 5）：
+
+```python
+# agent_loop 是独立函数，有名字、有参数、有返回
+def agent_loop(messages, max_steps=10) -> str:
+    step = 0
+    while step < max_steps:
+        step += 1
+        response = chat(messages, tools=TOOL_DEFINITIONS)
+        
+        if response["tool_calls"]:
+            for tc in tool_calls:           # Action
+                execute(name, args)
+                messages.append(result)     # Observation
+            continue                        # 下一轮 Thought
+        
+        return response["content"]          # 任务完成
+
+
+# main() 变成薄薄一层：处理用户输入，交给 Agent Loop
+def main():
+    messages = [...]
+    while True:
+        user_input = input()
+        messages.append(user_input)
+        reply = agent_loop(messages)       # ← 整个 Agent 逻辑在这里
+        print(reply)
+```
+
+### 为什么这个改动是 Day 5 的核心
+
+不是加了新功能，而是**给了一个已经存在的东西名字**。
+
+Day 4 的代码已经能多步工具调用——但内循环是埋在 main() 里的，看起来像是个"实现细节"。提取出来之后你才会意识到：
+
+**这个循环本身就是 Agent。** 剩下的东西——用户输入、打印输出——只是外层壳。
+
+### 现在能做什么
+
+开启 `/debug`，能看到 ReAct 循环的每一轮：
+
+```
+[LOOP] === 第 1 轮 ===             ← Thought: LLM 分析任务
+[DEBUG] 即将发送 6 条消息
+[TOOL] 调用: get_weather('北京')   ← Action: 执行工具
+[TOOL] 结果: 晴，25°C
+[TOOL] 调用: get_weather('上海')   ← Action: 并行执行
+[TOOL] 结果: 多云，28°C
+                                    ← Observation: 结果追加到上下文
+[LOOP] === 第 2 轮 ===             ← Thought: LLM 看到结果
+AI: 上海(28°C)比北京(25°C)更热    ← 最终回复
+```
+
+一次用户输入，触发了两轮 LLM 调用，LLM 自己规划了一轮要两个天气数据。
+
+### 为什么所有 Agent 本质上都是这个循环
+
+| Agent 产品 | 区别在哪 | 共同之处 |
+|------------|---------|----------|
+| 你的 Agent | 4 个工具（时间/天气/计算/shell） | `agent_loop()` |
+| Claude Code | 大量工具（读写文件/执行命令/搜索） | `agent_loop()` |
+| Cursor | 代码编辑工具 | `agent_loop()` |
+| OpenHands | Docker 沙箱 + 浏览器 | `agent_loop()` |
+
+**区别只是工具列表不同 + prompt 不同。核心循环结构完全一样。**
+
+### ReAct 模式的本质
+
+```
+Thought（思考）→  LLM 分析当前状态，决定下一步
+  ↓
+Action（行动）→  你的代码执行工具
+  ↓
+Observation（观察）→ 工具结果追加到上下文
+  ↓
+Thought（思考）→  LLM 看到结果，重新分析，决定下一步
+  ↓
+... 循环，直到 LLM 决定"完成了"（tool_calls 为 None）
+```
+
+`max_steps=10` 是安全阀——防止 LLM 陷入死循环。
+
+### 不足在哪里（痛点）
+
+**1. 上下文无限增长（Day 2 痛点 B 的回旋镖）**
+
+每轮 Agent Loop 都在 messages 里追加 2 条以上消息（tool_call + tool result）。多步任务很快积累几十条。再加上 Day 2 的多轮对话记忆（每次用户输入也追加），这个列表**只增不减**。
+
+**2. 对话结束后记忆全部丢失**
+
+程序关闭 → messages 列表消失 → 下次启动 AI 完全不记得你。目前 `history.json` 写了但没用。
+
+**3. 没有错误恢复**
+
+`agent_loop` 里如果工具执行报错，只是追加一条错误信息到上下文。但 LLM 可能反复尝试同一个错误工具，直到 `max_steps` 耗尽。
+
+**4. 没有能力判断"够了"**
+
+`max_steps` 是硬上限，LLM 自己不会说"我试了 3 次都失败，换个思路吧"。它在上下文满了之前会一直试。
+
+### 如何触发这些不足
+
+```bash
+You: 帮我创建项目目录结构
+# → LLM 可能调很多次 run_shell，每次都追加消息
+# → messages 从 5 条快速涨到 30+ 条
+
+# 然后关掉程序重开：
+python main.py
+You: 我刚才让你建了什么？
+# → AI：？？？完全不记得
+```
+
+### 引出什么概念
+
+**记忆与状态管理**——Day 6 的主题。
+
+- 上下文太长怎么办？→ 截断、摘要、滑动窗口
+- 对话记忆怎么持久化？→ `history.json` 的读写
+- token 用完了怎么办？→ context window 的概念
+
+### 核心理解
+
+**Agent ≠ 神秘 AI。Agent = `while True: think(); act(); observe()`**
+
+当你把这个循环提取出来并命名的那一刻，你就已经理解了现代 AI Agent 的工作原理。
+
+---
+
+
+
 
 
 
