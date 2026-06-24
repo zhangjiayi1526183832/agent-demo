@@ -8,11 +8,11 @@
 
 - [x] Day 1: 第一个 ChatBot — 调用 API 实现单轮问答
 - [x] Day 2: Context — 维护消息列表实现多轮记忆
-- [ ] Day 3: System Prompt — AI 人格与行为规则
-- [ ] Day 4: Tool Calling
-- [ ] Day 5: Agent Loop
-- [ ] Day 6: 记忆与状态管理
-- [ ] Day 7: 完整 Chat Agent
+- [x] Day 3: System Prompt — AI 人格与行为规则
+- [x] Day 4: Tool Calling
+- [x] Day 5: Agent Loop
+- [x] Day 6: 记忆与状态管理
+- [x] Day 7: 完整 Chat Agent
 
 ## 项目结构
 
