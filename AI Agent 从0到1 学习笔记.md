@@ -644,6 +644,167 @@ You: 我刚才让你建了什么？
 
 ---
 
+## Day 6：记忆与状态管理（2026-06-24）
+
+### 实现了什么
+
+**memory.py** — 三件事：持久化、裁剪、计数。
+
+#### 1. 对话持久化
+
+```python
+# 每次对话后保存（main.py 里自动调用）
+save_history(messages)    # → history.json
+
+# 启动时加载
+history = load_history()  # → 恢复上次的对话上下文
+```
+
+#### 2. 上下文窗口裁剪
+
+```python
+def trim_context(messages, max_tokens=8000):
+    # system prompt 永远保留
+    # 按消息对从后往前取，超出 max_tokens 就丢前面的
+    
+    system = messages[0]           # 人格定义，不能丢
+    history = messages[1:]         # 对话部分
+    
+    kept = []
+    for m in reversed(history):    # 从最新的开始往回取
+        if 累加后超出 max_tokens:
+            break                  # 太旧了，不要了
+        kept.insert(0, m)
+    
+    return [system] + kept
+```
+
+#### 3. Token 粗估
+
+```python
+def count_tokens(text):
+    # 1个中文字符 ≈ 2 tokens，4个英文字符 ≈ 1 token
+    # 不精确但足够判断"是否该裁剪了"
+```
+
+**main.py 改动**：
+
+```python
+# 启动：加载历史
+history = load_history()
+messages = [get_system_message(persona)] + history
+
+# 每次 agent_loop 前：裁剪
+messages = trim_context(messages, max_tokens=8000)
+
+# 每次 agent_loop 后：保存
+agent_loop(messages)
+save_history(messages)
+```
+
+新增命令：
+- `/clear` — 清除全部记忆，只保留 system prompt
+- 退出时自动保存
+
+### 现在能做什么
+
+**1. 跨会话记忆**：关闭程序 → 再打开 → AI 还记得你
+
+```bash
+# 第一次
+You: 我叫 Ezra
+AI: 好的，Ezra！
+You: /exit     ← 记忆保存
+
+# 第二次
+You: 我叫什么名字？
+AI: 你叫 Ezra  ← 记得！
+```
+
+**2. 防止上下文爆炸**：聊很久后，旧消息自动被裁剪，保持 messages 不会无限增长。
+
+**3. 手动清除记忆**：`/clear` 一键重置。
+
+### 不足在哪里（痛点）
+
+**1. Token 计数是估算，不是精确值**
+
+真正的 token 数由模型的 tokenizer 决定（比如中文可能是 1-3 tokens 不等）。粗略估算可能偏差 30-50%，有裁剪过度或不够的风险。
+
+**2. 裁剪是"暴力删除"，不是"智能摘要"**
+
+丢弃的消息就永久丢失了。更好的做法是对旧消息做**摘要**，保留关键信息但压缩体积：
+
+```
+# 当前：直接删
+messages[1:50] → 删掉，LLM 再也看不到
+
+# 更好：压缩保留
+"用户叫 Ezra，之前聊了编程和天气" → 一条摘要消息替代 50 条
+```
+
+**3. 持久化只保存了对话文本，没保存 tool 调用细节**
+
+`save_history` 跳过了 `role: "system"` 和 `role: "tool"` 消息。重启后 tool 执行历史不完整，LLM 看不到之前工具的结果。
+
+**4. 没有真正的"长期记忆"系统**
+
+目前只是一维列表。真正成熟的记忆系统有：
+- 短期记忆：当前 messages 列表
+- 长期记忆：向量数据库 + RAG 检索关键信息
+- 工作记忆：当前任务的临时状态
+
+### 如何触发这些不足
+
+```
+# 聊 100 轮
+You: (连续聊天...)
+# → 早期对话被裁剪丢弃
+You: 我一开始说的那个名字你还记得吗？
+AI: 不记得了（已被 trim_context 删掉）
+
+# 跨会话的 tool 结果
+You: 昨天查的北京天气，今天帮我对比一下
+AI: 没有昨天的天气数据（关闭时没保存 tool 消息）
+```
+
+### 为什么
+
+真正的"记忆"不是模型本身的能力，而是**状态管理**：
+
+```python
+# Day 1 的理解（错误）：
+# "Memory is inside the LLM"
+
+# 实际（正确）：
+# "Memory is in the messages list"
+# "LLM can only see what you feed it"
+```
+
+messages 列表就是 AI 的"全部记忆"。你能管理好多大、多久、怎么裁剪，就管理好了 AI 的记忆。
+
+### 引出什么概念
+
+**Day 7：完整 Chat Agent**——把 Day 1-6 的所有能力整合成一个完整的系统。
+
+不再引入新概念，而是：
+- 确认所有模块协同工作
+- 思考"如果你要做第二个 Agent，核心代码是什么"
+- 总结从 ChatBot 到 Agent 的完整旅程
+
+### 核心理解
+
+```
+短期记忆 = messages 列表（当前会话）
+长期记忆 = history.json（跨会话）
+上下文窗口 = trim_context（model token limit）
+Token 计数 = 衡量"记忆还能装多少"
+
+四者组成完整的状态管理系统。
+```
+
+---
+
 
 
 
