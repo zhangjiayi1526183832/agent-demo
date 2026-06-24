@@ -1,8 +1,9 @@
 """入口 — CLI 聊天循环"""
 
 import json
+import sys
 
-from llm import chat
+from llm import chat_stream
 from prompts import get_system_message, list_personas
 from tools import TOOL_DEFINITIONS, execute
 from memory import (
@@ -19,45 +20,74 @@ def log(tag: str, msg: str):
 
 
 # ════════════════════════════════════════════════════════════════
-# Agent Loop（Day 5）
+# Agent Loop — 流式版本
 # ════════════════════════════════════════════════════════════════
 
 def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
+    """ReAct 循环：流式输出文本，检测 tool_calls 并执行"""
     step = 0
     while step < max_steps:
         step += 1
         log("LOOP", f"=== 第 {step} 轮 ===")
         log("DEBUG", f"即将发送 {len(messages)} 条消息，约 {messages_token_count(messages)} tokens")
 
-        response = chat(messages, tools=TOOL_DEFINITIONS)
-        tool_calls = response.get("tool_calls")
+        # 打印 AI: 前缀（只打印一次）
+        if step == 1:
+            sys.stdout.write("AI: ")
+            sys.stdout.flush()
 
-        if tool_calls:
-            for tc in tool_calls:
-                fn = tc["function"]
-                name = fn["name"]
-                args = fn.get("arguments", "{}")
-                if isinstance(args, str):
-                    args = json.loads(args)
+        for event_type, data in chat_stream(messages, tools=TOOL_DEFINITIONS):
+            if event_type == "text":
+                sys.stdout.write(data)
+                sys.stdout.flush()
 
-                log("TOOL", f"调用: {name}({args})")
-                result = execute(name, args)
-                log("TOOL", f"结果: {result}")
+            elif event_type == "done":
+                tool_calls = data.get("tool_calls")
 
-                messages.append({
-                    "role": "assistant", "content": None,
-                    "tool_calls": [tc],
-                })
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result,
-                })
-            continue
+                if tool_calls:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
 
-        reply = response.get("content", "")
-        messages.append({"role": "assistant", "content": reply})
-        return reply
+                    # LLM 可能在调工具前说了话（如"好的，我来查一下"），保留这段文本
+                    prefix_text = data.get("content") or None
+
+                    for tc in tool_calls:
+                        fn = tc["function"]
+                        name = fn["name"]
+                        args = fn.get("arguments", "{}")
+                        if isinstance(args, str):
+                            args = json.loads(args)
+
+                        log("TOOL", f"调用: {name}({args})")
+                        result = execute(name, args)
+                        log("TOOL", f"结果: {result}")
+
+                        messages.append({
+                            "role": "assistant",
+                            "content": prefix_text,  # 保留流式中积累的文本
+                            "tool_calls": [{
+                                "id": tc.get("id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": json.dumps(args) if isinstance(args, dict) else args,
+                                },
+                            }],
+                        })
+                        prefix_text = None  # 只在第一条 assistant 消息里带文本
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "content": result,
+                        })
+                    break
+
+                # tool_calls 为空 → 最终文本回复
+                reply = data.get("content", "")
+                messages.append({"role": "assistant", "content": reply})
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return reply
 
     return "(达到最大循环步数，已中止)"
 
@@ -67,7 +97,6 @@ def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
 def main():
     global DEBUG
 
-    # 选择人格
     personas = list_personas()
     print("可用人格:")
     for i, name in enumerate(personas):
@@ -78,7 +107,6 @@ def main():
     except (ValueError, IndexError):
         persona = personas[0]
 
-    # ---- Day 6: 加载历史对话 ----
     history = load_history()
     messages = [get_system_message(persona)] + history
     if history:
@@ -99,7 +127,6 @@ def main():
             print(f"日志已{'开启' if DEBUG else '关闭'}")
             continue
         if user_input == "/clear":
-            # 清除所有历史，只保留 system prompt
             messages = [messages[0]]
             save_history(messages)
             print("记忆已清除")
@@ -119,16 +146,12 @@ def main():
 
         messages.append({"role": "user", "content": user_input})
 
-        # ---- Day 6: 上下文裁剪，防止无限增长 ----
         before = len(messages)
         messages = trim_context(messages, max_tokens=8000)
         if len(messages) < before:
             log("MEMORY", f"上下文裁剪: {before} → {len(messages)} 条消息")
 
-        reply = agent_loop(messages)
-        print(f"AI: {reply}")
-
-        # ---- Day 6: 每次对话后保存 ----
+        agent_loop(messages)
         save_history(messages)
 
 

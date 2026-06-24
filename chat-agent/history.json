@@ -1,1 +1,67 @@
-[]
+[
+  {
+    "role": "user",
+    "content": "北京上海深圳天气分别怎么样？"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来查询这三个城市的天气情况。",
+    "tool_calls": [
+      {
+        "id": "call_00_OFiWlSp3BGL7F4TXV7r33270",
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "arguments": "{\"city\": \"\\u5317\\u4eac\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_OFiWlSp3BGL7F4TXV7r33270",
+    "content": "晴，25°C，湿度 40%"
+  },
+  {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+      {
+        "id": "call_01_TWusjysR3Zv6OuOUynXU0081",
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "arguments": "{\"city\": \"\\u4e0a\\u6d77\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_TWusjysR3Zv6OuOUynXU0081",
+    "content": "多云，28°C，湿度 65%"
+  },
+  {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+      {
+        "id": "call_02_ai1JeHLWEvPRCyMyaJ3h0979",
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "arguments": "{\"city\": \"\\u6df1\\u5733\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_02_ai1JeHLWEvPRCyMyaJ3h0979",
+    "content": "阵雨，30°C，湿度 80%"
+  },
+  {
+    "role": "assistant",
+    "content": "以下是北京、上海、深圳三个城市的天气情况：\n\n| 城市 | 天气 | 温度 | 湿度 |\n|------|:----:|:----:|:----:|\n| 🌞 **北京** | 晴 | **25°C** | 40% |\n| ⛅ **上海** | 多云 | **28°C** | 65% |\n| 🌦️ **深圳** | 阵雨 | **30°C** | 80% |\n\n**小结：**\n- **北京**天气晴好，温度适中，湿度较低，体感舒适。\n- **上海**多云天气，气温较北京略高，湿度适中。\n- **深圳**有阵雨，温度较高且湿度较大，体感会比较闷热，出门建议带伞哦！"
+  }
+]
