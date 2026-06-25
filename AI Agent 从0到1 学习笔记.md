@@ -965,14 +965,7 @@ def agent_loop(messages, tools, max_steps=10):
 
 ### 后续学习方向（重排）
 
-**第一阶段：打磨基础**
-Streaming → Async → Observability
-
-**第二阶段：给 Agent 更多能力**
-RAG → Long-term Memory → MCP
-
-**第三阶段：复杂 Agent 系统**
-Sandbox → Multi-Agent → Browser Agent → Computer Use
+详见 **[AI Agent 进阶学习笔记.md](AI%20Agent%20进阶学习笔记.md)**
 
 ### 最终结论
 
@@ -987,130 +980,6 @@ while True:
 ```
 
 当你亲手写出这 300 行代码，你就已经进入了 Agent Engineering 的世界。
-
----
-
-## 进阶一：Streaming（流式输出）（2026-06-24）
-
-### 为什么需要
-
-Day 1-7 的 `chat()` 是"一次性模式"：
-
-```
-发送请求 → [等待 4 秒，屏幕空白] → 整段文字突然出现
-```
-
-用户体验很差——不知道 AI 是否在工作。ChatGPT 那种打字机效果，就是流式输出。
-
-### 是什么
-
-两种模式的对比：
-
-```
-常规模式（Day 1-7）：
-  HTTP POST → API 生成完整回复 → 一次性返回 JSON
-
-流式模式：
-  HTTP POST (stream=True) → API 边生成边返回 token
-  → HTTP 连接保持打开，数据通过 SSE 逐 chunk 到达
-```
-
-HTTP 层面的区别：
-
-```
-常规响应:
-  Content-Type: application/json
-  Body: {"choices": [{"message": {"content": "全部文字"}}]}
-
-流式响应:
-  Content-Type: text/event-stream
-  data: {"choices": [{"delta": {"content": "面"}}]}
-  data: {"choices": [{"delta": {"content": "向"}}]}
-  data: {"choices": [{"delta": {"content": "对"}}]}
-  ...
-  data: [DONE]
-```
-
-### 实现了什么
-
-**llm.py** — 新增 `chat_stream()` 生成器：
-
-```python
-def chat_stream(messages, tools=None):
-    # 1. 发送 stream=True 的 POST 请求
-    response = requests.post(..., stream=True)
-
-    # 2. 逐行读取 SSE 事件
-    for line in response.iter_lines():
-        if line.startswith("data: "):
-            chunk = json.loads(line[6:])
-            delta = chunk["choices"][0]["delta"]
-
-            if "content" in delta:
-                yield ("text", delta["content"])    # 逐字输出
-
-    # 3. 返回累积的完整消息
-    yield ("done", {"content": ..., "tool_calls": [...]})
-```
-
-**main.py** — `agent_loop()` 改为流式：
-
-```python
-for event_type, data in chat_stream(messages, tools):
-    if event_type == "text":
-        sys.stdout.write(data)     # 逐字打印
-        sys.stdout.flush()         # 立即刷新，不加缓冲
-    elif event_type == "done":
-        if data["tool_calls"]:
-            ...                     # 执行工具
-            break                   # 下一轮循环
-        else:
-            return data["content"]  # 最终回复
-```
-
-### 关键细节：tool_calls 在流式中的处理
-
-流式模式下，tool_calls 可能分多个 chunk 到达：
-
-```
-chunk 1: delta.tool_calls[0] = {"id": "call_xxx", "function": {"name": "get_", ...}}
-chunk 2: delta.tool_calls[0] = {"function": {"name": "current_time", ...}}
-chunk 3: delta.tool_calls[0] = {"function": {"arguments": "{}"}}
-chunk 4: finish_reason = "tool_calls"
-```
-
-需要在 `chat_stream()` 中**累积拼接**：
-
-```python
-accumulated_tool_calls = {}  # index → {id, name, arguments}
-
-for chunk in stream:
-    for tc in delta.get("tool_calls", []):
-        idx = tc["index"]
-        accumulated_tool_calls[idx]["function"]["name"] += tc["function"]["name"]
-        accumulated_tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
-```
-
-### 核心理解
-
-Streaming 只是**传输方式**的改变，不影响 LLM 的决策逻辑。`agent_loop()` 的结构完全不变——只是把 `chat()` 换成了 `chat_stream()`。
-
-```python
-# 之前
-response = chat(messages, tools)
-if response["tool_calls"]: ...
-else: print(response["content"])
-
-# 之后
-for event, data in chat_stream(messages, tools):
-    if event == "text": print(data)
-    elif event == "done":
-        if data["tool_calls"]: ... else: return data["content"]
-```
-
-逻辑一模一样，只是输出变成了边收边打印。
-
----
 
 
 
