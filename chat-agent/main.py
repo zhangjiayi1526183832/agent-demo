@@ -1,9 +1,10 @@
 """入口 — CLI 聊天循环"""
 
+import asyncio
 import json
 import sys
 
-from llm import chat_stream
+from llm import achat_stream
 from prompts import get_system_message, list_personas
 from tools import TOOL_DEFINITIONS, execute
 from memory import (
@@ -20,23 +21,22 @@ def log(tag: str, msg: str):
 
 
 # ════════════════════════════════════════════════════════════════
-# Agent Loop — 流式版本
+# Agent Loop — 异步版（Day 进阶二）
 # ════════════════════════════════════════════════════════════════
 
-def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
-    """ReAct 循环：流式输出文本，检测 tool_calls 并执行"""
+async def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
+    """ReAct 循环：异步流式 + 工具并行执行"""
     step = 0
     while step < max_steps:
         step += 1
         log("LOOP", f"=== 第 {step} 轮 ===")
         log("DEBUG", f"即将发送 {len(messages)} 条消息，约 {messages_token_count(messages)} tokens")
 
-        # 打印 AI: 前缀（只打印一次）
         if step == 1:
             sys.stdout.write("AI: ")
             sys.stdout.flush()
 
-        for event_type, data in chat_stream(messages, tools=TOOL_DEFINITIONS):
+        async for event_type, data in achat_stream(messages, tools=TOOL_DEFINITIONS):
             if event_type == "text":
                 sys.stdout.write(data)
                 sys.stdout.flush()
@@ -48,10 +48,11 @@ def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
                     sys.stdout.write("\n")
                     sys.stdout.flush()
 
-                    # LLM 可能在调工具前说了话（如"好的，我来查一下"），保留这段文本
                     prefix_text = data.get("content") or None
 
-                    for tc in tool_calls:
+                    # ---- 工具并行执行 ----
+                    # 用 asyncio.to_thread 把同步工具放到线程池里并发跑
+                    async def run_one(tc, prefix=None):
                         fn = tc["function"]
                         name = fn["name"]
                         args = fn.get("arguments", "{}")
@@ -59,12 +60,22 @@ def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
                             args = json.loads(args)
 
                         log("TOOL", f"调用: {name}({args})")
-                        result = execute(name, args)
+                        result = await asyncio.to_thread(execute, name, args)
                         log("TOOL", f"结果: {result}")
+                        return tc, name, args, result, prefix
 
+                    # 一次性发出所有工具调用，并发执行
+                    tasks = [
+                        run_one(tc, prefix_text if i == 0 else None)
+                        for i, tc in enumerate(tool_calls)
+                    ]
+                    results = await asyncio.gather(*tasks)
+
+                    # 按顺序追加到 messages
+                    for tc, name, args, result, prefix in results:
                         messages.append({
                             "role": "assistant",
-                            "content": prefix_text,  # 保留流式中积累的文本
+                            "content": prefix,
                             "tool_calls": [{
                                 "id": tc.get("id", ""),
                                 "type": "function",
@@ -74,7 +85,6 @@ def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
                                 },
                             }],
                         })
-                        prefix_text = None  # 只在第一条 assistant 消息里带文本
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.get("id", ""),
@@ -82,7 +92,7 @@ def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
                         })
                     break
 
-                # tool_calls 为空 → 最终文本回复
+                # 最终文本回复
                 reply = data.get("content", "")
                 messages.append({"role": "assistant", "content": reply})
                 sys.stdout.write("\n")
@@ -94,7 +104,7 @@ def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
 
 # ════════════════════════════════════════════════════════════════
 
-def main():
+async def main():
     global DEBUG
 
     personas = list_personas()
@@ -151,9 +161,9 @@ def main():
         if len(messages) < before:
             log("MEMORY", f"上下文裁剪: {before} → {len(messages)} 条消息")
 
-        agent_loop(messages)
+        await agent_loop(messages)
         save_history(messages)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

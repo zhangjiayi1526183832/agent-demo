@@ -114,7 +114,108 @@ Streaming 只是**传输方式**的改变。`agent_loop()` 结构完全不变—
 
 ---
 
-### Async（工具并行调用）
+### Async（工具并行调用）（2026-07-06）
+
+#### 为什么需要
+
+当前工具执行是串行的：
+
+```python
+for tc in tool_calls:
+    execute(name, args)   # 等 → 等 → 等
+```
+
+4 个城市天气 = 4 次串行 = 耗时相加。但它们互不依赖，完全可以同时查。
+
+#### 是什么
+
+```
+同步 (requests)              异步 (aiohttp + asyncio)
+  send → wait → recv            send1 + send2 + send3 + send4
+  send → wait → recv            ↓ 全部发出
+  send → wait → recv            recv(any order) → 全部收集
+  send → wait → recv
+  总时间 = T1+T2+T3+T4          总时间 = max(T1,T2,T3,T4)
+```
+
+核心机制：`await` 在等待一个 I/O 操作时不阻塞当前线程，事件循环可以切换到另一个任务。
+
+#### 怎么实现
+
+**llm.py** — 新增 `achat_stream()`，用 aiohttp 替代 requests：
+
+```python
+# 同步版：requests
+response = requests.post(url, stream=True)
+for line in response.iter_lines():
+    ...
+
+# 异步版：aiohttp  
+async with aiohttp.ClientSession() as session:
+    async with session.post(url, json=body) as resp:
+        async for line in resp.content:     # ← async for 替代 for
+            ...
+```
+
+结构一模一样，只换了 HTTP 库和加了 `async/await` 关键字。
+
+**main.py** — `agent_loop` 改为异步 + 工具并行：
+
+```python
+async def agent_loop(messages, max_steps=10):
+    ...
+    async for event_type, data in achat_stream(messages, tools):  # async for
+        ...
+
+        # 工具并行执行：asyncio.gather + to_thread
+        tasks = [
+            asyncio.to_thread(execute, tc["function"]["name"], args)
+            for tc in tool_calls
+        ]
+        results = await asyncio.gather(*tasks)
+        # 4 个工具同时执行，总耗时 = 最慢的那个
+
+async def main():
+    ...
+    await agent_loop(messages)
+
+if __name__ == "__main__":
+    asyncio.run(main())   # 启动事件循环
+```
+
+#### 关键细节
+
+`asyncio.to_thread(func, *args)` — 把同步函数放到线程池执行，不阻塞事件循环。适合 I/O 密集型工具（网络请求、文件操作）。
+
+`asyncio.gather(*tasks)` — 等待所有任务完成，返回结果列表。
+
+#### 实测效果
+
+4 个城市天气查询：
+
+```
+[TOOL] 调用: 北京   ← 4 个请求同时发出
+[TOOL] 调用: 上海
+[TOOL] 调用: 深圳
+[TOOL] 调用: 东京
+[TOOL] 结果: 上海   ← 返回顺序 ≠ 调用顺序（证明并行）
+[TOOL] 结果: 北京
+[TOOL] 结果: 东京
+[TOOL] 结果: 深圳
+```
+
+#### 核心理解
+
+`async/await` 不加速单个操作——它加速的是"多个 I/O 操作同时跑"的场景。
+
+```python
+# 同步：一个接一个
+for task in tasks:
+    await_io(task)     # 总耗时 = sum
+
+# 异步：全部同时
+await gather([await_io(t) for t in tasks])  # 总耗时 = max
+```
 
 ---
 

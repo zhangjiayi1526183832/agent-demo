@@ -123,3 +123,86 @@ def chat_stream(messages: list[dict], tools: list[dict] | None = None):
         "content": accumulated_content or None,
         "tool_calls": final_tool_calls,
     })
+
+
+# ════════════════════════════════════════════════════════════════
+# Async（异步版 API 调用）
+# ════════════════════════════════════════════════════════════════
+
+import aiohttp
+
+
+async def achat_stream(messages: list[dict], tools: list[dict] | None = None):
+    """流式模式的异步版本 — 用 aiohttp 替代 requests
+
+    用法和 chat_stream 完全一样，只是调用方需要用 async for:
+        async for event_type, data in achat_stream(messages, tools):
+            ...
+    """
+    body = {"model": MODEL, "messages": messages, "stream": True}
+    if tools:
+        body["tools"] = tools
+
+    accumulated_content = ""
+    accumulated_tool_calls = {}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        ) as resp:
+            # aiohttp 的流式读取：逐行迭代响应体
+            async for raw_line in resp.content:
+                line = raw_line.decode("utf-8").strip()
+                if not line:
+                    continue
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    break
+
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                delta = chunk["choices"][0].get("delta", {})
+
+                if "content" in delta and delta["content"]:
+                    accumulated_content += delta["content"]
+                    yield ("text", delta["content"])
+
+                if "tool_calls" in delta:
+                    for tc in delta["tool_calls"]:
+                        idx = tc.get("index", 0)
+                        if idx not in accumulated_tool_calls:
+                            accumulated_tool_calls[idx] = {
+                                "id": tc.get("id", ""),
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        entry = accumulated_tool_calls[idx]
+                        if "id" in tc:
+                            entry["id"] = tc["id"]
+                        if "function" in tc:
+                            if "name" in tc["function"] and tc["function"]["name"]:
+                                entry["function"]["name"] += tc["function"]["name"]
+                            if "arguments" in tc["function"]:
+                                entry["function"]["arguments"] += tc["function"]["arguments"]
+
+    final_tool_calls = None
+    if accumulated_tool_calls:
+        final_tool_calls = [
+            {"index": idx, "type": "function", **entry}
+            for idx, entry in accumulated_tool_calls.items()
+        ]
+
+    yield ("done", {
+        "role": "assistant",
+        "content": accumulated_content or None,
+        "tool_calls": final_tool_calls,
+    })
