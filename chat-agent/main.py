@@ -148,8 +148,10 @@ async def main():
             choice = input("切换人格编号: ").strip()
             try:
                 persona = personas[int(choice)]
-                messages[0] = get_system_message(persona)
-                print(f"已切换为: {persona}")
+                # 清除旧历史——旧人格的对话风格会污染新人格
+                messages = [get_system_message(persona)]
+                save_history(messages)
+                print(f"已切换为: {persona}（对话历史已重置）")
             except (ValueError, IndexError):
                 print("无效选择")
             continue
