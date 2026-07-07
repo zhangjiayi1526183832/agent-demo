@@ -11,26 +11,27 @@ from memory import (
     save_history, load_history,
     trim_context, messages_token_count,
 )
+from logger import Trace
+import logger
 
-# ---- 日志开关 ----
+# ---- 日志开关（/debug 同时控制旧 DEBUG 和 logger.ENABLED）----
 DEBUG = False
-
-def log(tag: str, msg: str):
-    if DEBUG:
-        print(f"[{tag}] {msg}")
 
 
 # ════════════════════════════════════════════════════════════════
-# Agent Loop — 异步版（Day 进阶二）
+# Agent Loop — 异步版 + 可观测性
 # ════════════════════════════════════════════════════════════════
 
 async def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
-    """ReAct 循环：异步流式 + 工具并行执行"""
+    """ReAct 循环：异步流式 + 工具并行 + 结构化日志"""
+    trace = Trace()
+    trace.event("agent_start", f"开始处理，当前 {len(messages)} 条上下文消息")
+
     step = 0
     while step < max_steps:
         step += 1
-        log("LOOP", f"=== 第 {step} 轮 ===")
-        log("DEBUG", f"即将发送 {len(messages)} 条消息，约 {messages_token_count(messages)} tokens")
+        token_est = messages_token_count(messages)
+        trace.event("llm", f"第{step}轮API调用 → 消息{len(messages)}条 预估{token_est}tokens")
 
         if step == 1:
             sys.stdout.write("AI: ")
@@ -50,8 +51,6 @@ async def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
 
                     prefix_text = data.get("content") or None
 
-                    # ---- 工具并行执行 ----
-                    # 用 asyncio.to_thread 把同步工具放到线程池里并发跑
                     async def run_one(tc, prefix=None):
                         fn = tc["function"]
                         name = fn["name"]
@@ -59,19 +58,18 @@ async def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
                         if isinstance(args, str):
                             args = json.loads(args)
 
-                        log("TOOL", f"调用: {name}({args})")
+                        trace.event("tool", f"调用: {name}", args=str(args))
                         result = await asyncio.to_thread(execute, name, args)
-                        log("TOOL", f"结果: {result}")
+                        trace.event("tool_result", f"{name} → {result[:50]}")
+                        trace.add_tool_call()
                         return tc, name, args, result, prefix
 
-                    # 一次性发出所有工具调用，并发执行
                     tasks = [
                         run_one(tc, prefix_text if i == 0 else None)
                         for i, tc in enumerate(tool_calls)
                     ]
                     results = await asyncio.gather(*tasks)
 
-                    # 按顺序追加到 messages
                     for tc, name, args, result, prefix in results:
                         messages.append({
                             "role": "assistant",
@@ -97,8 +95,15 @@ async def agent_loop(messages: list[dict], max_steps: int = 10) -> str:
                 messages.append({"role": "assistant", "content": reply})
                 sys.stdout.write("\n")
                 sys.stdout.flush()
+
+                trace.event("agent_end", f"完成，共{step}轮 {trace.tool_count}次工具调用")
+                trace.summary()
+                trace.save()
                 return reply
 
+    trace.event("agent_end", "达到最大步数，中止")
+    trace.summary()
+    trace.save()
     return "(达到最大循环步数，已中止)"
 
 
@@ -134,7 +139,8 @@ async def main():
             break
         if user_input == "/debug":
             DEBUG = not DEBUG
-            print(f"日志已{'开启' if DEBUG else '关闭'}")
+            logger.ENABLED = DEBUG  # 同步开关
+            print(f"可观测日志已{'开启' if DEBUG else '关闭'}")
             continue
         if user_input == "/clear":
             messages = [messages[0]]
@@ -148,7 +154,6 @@ async def main():
             choice = input("切换人格编号: ").strip()
             try:
                 persona = personas[int(choice)]
-                # 清除旧历史——旧人格的对话风格会污染新人格
                 messages = [get_system_message(persona)]
                 save_history(messages)
                 print(f"已切换为: {persona}（对话历史已重置）")
@@ -161,7 +166,8 @@ async def main():
         before = len(messages)
         messages = trim_context(messages, max_tokens=8000)
         if len(messages) < before:
-            log("MEMORY", f"上下文裁剪: {before} → {len(messages)} 条消息")
+            if logger.ENABLED:
+                print(f"[OBSERVE] 上下文裁剪: {before} → {len(messages)} 条消息")
 
         await agent_loop(messages)
         save_history(messages)

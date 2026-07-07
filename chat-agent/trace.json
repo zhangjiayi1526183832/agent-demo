@@ -1,0 +1,52 @@
+{
+  "events": [
+    {
+      "ts": 0.0,
+      "category": "agent_start",
+      "detail": "开始处理，当前 4 条上下文消息"
+    },
+    {
+      "ts": 0.0,
+      "category": "llm",
+      "detail": "第1轮API调用 → 消息4条 预估69tokens"
+    },
+    {
+      "ts": 1.354,
+      "category": "tool",
+      "detail": "调用: get_weather",
+      "args": "{'city': '北京'}"
+    },
+    {
+      "ts": 1.355,
+      "category": "tool",
+      "detail": "调用: get_weather",
+      "args": "{'city': '上海'}"
+    },
+    {
+      "ts": 1.355,
+      "category": "tool_result",
+      "detail": "get_weather → 多云，28°C，湿度 65%"
+    },
+    {
+      "ts": 1.355,
+      "category": "tool_result",
+      "detail": "get_weather → 晴，25°C，湿度 40%"
+    },
+    {
+      "ts": 1.356,
+      "category": "llm",
+      "detail": "第2轮API调用 → 消息8条 预估165tokens"
+    },
+    {
+      "ts": 4.519,
+      "category": "agent_end",
+      "detail": "完成，共2轮 2次工具调用"
+    }
+  ],
+  "token_count": {
+    "input": 0,
+    "output": 0
+  },
+  "tool_count": 2,
+  "elapsed": 4.5198400020599365
+}

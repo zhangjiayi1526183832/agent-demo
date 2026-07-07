@@ -219,7 +219,92 @@ await gather([await_io(t) for t in tasks])  # 总耗时 = max
 
 ---
 
-### Observability（可观测性）
+### Observability（可观测性）（2026-07-07）
+
+#### 为什么需要
+
+`/debug` 的输出是一堆杂乱的 print，没有时间戳、没有统计、无法回溯。
+
+```
+[LOOP] === 第 1 轮 ===
+[TOOL] 调用: get_weather
+[TOOL] 结果: 晴，25°C              ← 什么时候发生的？花了多久？
+```
+
+你不知道哪一步耗时最长、整个对话花了多少轮、工具调了多少次。
+
+#### 是什么
+
+给 Agent 装上"黑匣子"——用结构化事件替代零散的 print：
+
+```
+[+0.000s] [AGENT_START] 开始处理，当前 4 条上下文消息
+[+0.000s] [LLM] 第1轮API调用 → 消息4条 预估69tokens
+[+1.354s] [TOOL] 调用: get_weather
+[+1.355s] [TOOL_RESULT] get_weather → 晴，25°C，湿度 40%
+[+1.356s] [LLM] 第2轮API调用 → 消息8条 预估165tokens
+[+4.519s] [AGENT_END] 完成，共2轮 2次工具调用
+────────────────────────────────────────
+运行摘要:
+  耗时: 4.52s
+  事件数: 8
+  LLM调用轮数: 2
+  工具调用次数: 2
+────────────────────────────────────────
+```
+
+每个事件都有：**相对时间戳 + 类型 + 详情**。运行结束后自动打印摘要 + 保存 `trace.json`。
+
+#### 怎么实现
+
+**logger.py** — Trace 类：
+
+```python
+class Trace:
+    def __init__(self):
+        self.events = []
+        self.start_time = time.time()
+        self.tool_count = 0
+
+    def event(self, category, detail, **kwargs):
+        ts = time.time() - self.start_time    # 相对时间
+        self.events.append({"ts": ts, "category": category, "detail": detail})
+        print(f"[+{ts:>6.3f}s] [{category.upper()}] {detail}")
+
+    def summary(self):
+        # 打印汇总统计
+
+    def save(self, filepath="trace.json"):
+        # 持久化到文件
+```
+
+**main.py** — 在 agent_loop 的关键节点打点：
+
+```python
+async def agent_loop(messages, max_steps=10):
+    trace = Trace()
+    trace.event("agent_start", f"开始...")
+
+    while step < max_steps:
+        trace.event("llm", f"第{step}轮...")
+        ...
+        trace.event("tool", f"调用: {name}")
+        trace.event("tool_result", f"{name} → {result}")
+        ...
+
+    trace.event("agent_end", "完成")
+    trace.summary()
+    trace.save()
+```
+
+#### 核心理解
+
+Observability = **给 Agent 的每一步打上时间戳和标签**。不是为了打印好看，而是让你在 Agent 出错时有东西可以回溯。
+
+```python
+# 之前：出错了，不知道发生了什么
+# 之后：打开 trace.json，按时间线回放整个过程
+```
 
 ---
 
