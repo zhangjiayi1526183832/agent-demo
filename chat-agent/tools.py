@@ -2,6 +2,7 @@
 
 import datetime
 import subprocess
+import rag
 
 # ---- 工具定义（JSON Schema 格式，告诉 LLM 每个工具怎么用）----
 
@@ -68,6 +69,7 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    rag.TOOL_DEFINITION,
 ]
 
 # ---- 编码处理 ----
@@ -131,5 +133,9 @@ def execute(name: str, arguments: dict) -> str:
             return "命令执行超时"
         except Exception as e:
             return f"命令执行失败: {e}"
+
+    if name == "search_document":
+        query = arguments.get("query", "")
+        return rag.execute(query)
 
     return f"未知工具: {name}"

@@ -310,7 +310,105 @@ Observability = **给 Agent 的每一步打上时间戳和标签**。不是为�
 
 ## 第二阶段：给 Agent 更多能力
 
-### RAG（检索增强生成）
+### RAG（检索增强生成）（2026-07-08）
+
+#### 为什么需要
+
+当前 Agent 的知识来源：训练数据 + System Prompt。无法回答关于**你的本地文件**的问题。
+
+```
+You: 这个项目的学习理念是什么？
+AI: 不知道，我是通用AI。  ← 它没读过项目的文档
+```
+
+#### 是什么
+
+RAG = 每次提问时，先从文档库**检索**相关内容，**注入** prompt，再让 LLM **生成**回答。
+
+```
+用户:"项目用什么技术栈？"
+         │
+         ▼
+   1. 检索: search("技术栈") → 找到 CLAUDE.md 片段
+         │
+         ▼
+   2. 注入: messages += "参考以下文档: [片段内容]"
+         │
+         ▼
+   3. 生成: LLM 看到片段，回答 "Python + requests + DeepSeek API"
+```
+
+不是让 LLM 记住文档，而是**只在需要时检索，把相关内容塞进 prompt**。
+
+#### 怎么实现
+
+**rag.py** — 三个核心函数：
+
+```python
+# 1. 加载文档，切成块
+def load_document(filepath, chunk_size=400):
+    text = read_file(filepath)
+    while start < len(text):
+        chunk = text[start:start+chunk_size]  # 按尺寸切
+        _chunks.append((filename, idx, chunk))
+
+# 2. 关键词检索（不需向量数据库）
+def search(query, top_k=3):
+    for chunk in _chunks:
+        score = chunk.count(query) * 10  # 简单评分
+    return top_k_results
+
+# 3. 格式化结果 → 注入 prompt
+def execute(query):
+    results = search(query)
+    return format(results)  # → LLM 看到的 tool result
+```
+
+**tools.py** — 注册为工具：
+
+```python
+TOOL_DEFINITIONS = [..., rag.TOOL_DEFINITION]  # search_document
+
+def execute(name, args):
+    if name == "search_document":
+        return rag.execute(args["query"])
+```
+
+**main.py** — `/load` 命令加载文档：
+
+```python
+/load ../CLAUDE.md  → 切成 4 个片段
+/load ./README.md   → 再加载更多文档
+```
+
+#### 实测效果
+
+```
+You: 这个项目的学习理念是什么？
+[TOOL] search_document("学习理念") → 找到 2 个相关片段
+[TOOL] search_document("学习理念") → 补充搜索，找到 3 个
+AI: 项目核心学习思想:
+    - 从底层做起，不依赖框架
+    - 循序渐进（Day 1→7）
+    - 先理解原理，再动手实现
+```
+
+#### 当前局限
+
+- **关键词匹配**：只能用词频评分，不理解语义（"学会"和"掌握"不会匹配）
+- **无向量检索**：大文档库时性能差且精度低
+- **片段硬切**：可能在句子中间截断
+
+这些局限正好引出下一个主题：**向量数据库 + 语义检索**。
+
+#### 核心理解
+
+```python
+# RAG 不是魔法，就三步
+1. chunks = load_and_split(document)      # 切文档
+2. relevant = search(query, chunks)        # 找相关
+3. prompt = f"参考:{relevant}\n问题:{query}"  # 注入 → LLM 回答
+```
 
 ---
 

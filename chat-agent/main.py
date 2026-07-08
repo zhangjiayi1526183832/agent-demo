@@ -13,6 +13,7 @@ from memory import (
 )
 from logger import Trace
 import logger
+import rag
 
 # ---- 日志开关（/debug 同时控制旧 DEBUG 和 logger.ENABLED）----
 DEBUG = False
@@ -141,6 +142,17 @@ async def main():
             DEBUG = not DEBUG
             logger.ENABLED = DEBUG  # 同步开关
             print(f"可观测日志已{'开启' if DEBUG else '关闭'}")
+            continue
+        if user_input.startswith("/load"):
+            filepath = user_input[5:].strip()
+            if not filepath:
+                print("用法: /load <文件路径>")
+                continue
+            try:
+                n = rag.load_document(filepath)
+                print(f"已加载: {filepath} → {n} 个片段\n{rag.status()}")
+            except FileNotFoundError:
+                print(f"文件不存在: {filepath}")
             continue
         if user_input == "/clear":
             messages = [messages[0]]
